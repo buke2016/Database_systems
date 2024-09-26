@@ -1,0 +1,8 @@
+-- Studentreport from HackerRank.com
+*/
+SELECT IF Grade < 8,NULL,Name, Grade,Marks
+FROM student
+JOIN grades
+ON student.name BETWEEN min_mark and max_mark
+ORDER BY grade DESC,name;
+*\end{code}
