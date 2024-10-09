@@ -1,81 +1,116 @@
 import requests
 import json
 import sqlite3
+import os
 from datetime import datetime
+from dotenv import load_dotenv
 
-API_KEY = 'U4VVlmknoEZ900NSj0tKy13SR2rK4bFF7XCaOxRG'
+# Load environment variables from a .env file
+load_dotenv()
+
+# Get the API key from environment variables
+API_KEY = os.getenv('EIA_API_KEY')  
+if not API_KEY:
+    print("API Key is missing! Make sure it's correctly stored in the .env file.")
+    exit()
+
 BASE_URL = 'https://api.eia.gov/v2/'
 
-# Query for net generation from wind
+# Query for net generation from all energy types (including wind, solar, etc.)
 endpoint = 'electricity/electric-power-operational-data/data/'
 params = {
-    'api_key': API_KEY,
+    'api_key': API_KEY,    
     'frequency': 'monthly',
     'data': ['value'],
-    'facets[fueltypeid][]': ['WND'],  # Correct facet structure for fuel type (wind)
-    'facets[sectorid][]': ['99'],     # Correct facet structure for sector (all sectors)
+    'facets[sectorid][]': ['99'],  
     'start': '2022-01',
     'end': '2022-12',
-    'sort[0][column]': 'period',      # Correct sort structure with index [0]
-    'sort[0][direction]': 'desc',     # Sort direction: descending (most recent first)
+    'sort[0][column]': 'period',
+    'sort[0][direction]': 'desc'
 }
 
 response = requests.get(BASE_URL + endpoint, params=params)
 
-# Check if the response was successful
 if response.status_code == 200:
     data = json.loads(response.text)
 
     # Print the data to verify
     print(json.dumps(data, indent=2))
 
-    # Loading data into a SQL database
     # Create or connect to the SQLite database
-    conn = sqlite3.connect('wind_generation.db')
+    conn = sqlite3.connect('energy_data.db')
     cursor = conn.cursor()
 
-    # Create a table to store the data
+    # Create tables for general energy statistics (including production/consumption)
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS wind_generation (
+    CREATE TABLE IF NOT EXISTS energy_stats (
         date TEXT,
-        value REAL
+        energy_type TEXT,
+        consumption REAL,
+        production REAL
     )
     ''')
 
-    # Insert the data into the table
+    # Insert data into the table, filtering for relevant fields
     for row in data['response']['data']:
-        print(f"Row data: {row}")  # Debug: print each row to check its structure
-
-        # Extract the date and value, handle missing keys
-        date = row.get('period')  # Ensure 'period' key exists
+        # Extract date and energy type from the API response
+        date = row.get('period')
         if date:
-            date = datetime.strptime(date, '%Y-%m').strftime('%Y-%m-%d')  # Format date
+            date = datetime.strptime(date, '%Y-%m').strftime('%Y-%m-%d')
         else:
-            print("Missing 'period' in row, skipping...")
-            continue  # Skip rows without 'period'
+            continue  # Skip rows without a valid date
 
-        value = row.get('value')  # Handle missing 'value' key
-        if value is None:
-            print("Missing 'value' in row, setting default to 0")
-            value = 0  # Set a default value if 'value' key is missing
+        # Extract energy type and consumption
+        energy_type = row.get('fueltypeid', 'UNKNOWN')
+        consumption = row.get('value', 0)  # Assuming 'value' represents consumption
+        production = consumption  # This is an assumption; adjust based on actual API response
 
-        cursor.execute('INSERT INTO wind_generation (date, value) VALUES (?, ?)', (date, value))
+        # Insert data into the energy_stats table
+        cursor.execute('INSERT INTO energy_stats (date, energy_type, consumption, production) VALUES (?, ?, ?, ?)', 
+                       (date, energy_type, consumption, production))
 
-    # Commit the changes and close the connection
+    # Commit the changes
     conn.commit()
+
+    # Analyzing the data
+    # 1. Average total consumption and production
+    cursor.execute('SELECT AVG(consumption), AVG(production) FROM energy_stats')
+    avg_consumption, avg_production = cursor.fetchone()
+    print(f"Average Total Consumption: {avg_consumption}")
+    print(f"Average Total Production: {avg_production}")
+
+    # 2. Query the most popular (most consumed) energy source per month
+    cursor.execute('''
+    SELECT date, energy_type, MAX(consumption)
+    FROM energy_stats
+    GROUP BY date
+    ''')
+    most_popular_per_month = cursor.fetchall()
+    for row in most_popular_per_month:
+        print(f"Month: {row[0]}, Most Consumed Energy Source: {row[1]}, Consumption: {row[2]}")
+
+    # 3. Start a transaction to remove all export data
+    try:
+        conn.execute('BEGIN TRANSACTION')
+        cursor.execute("DELETE FROM energy_stats WHERE energy_type = 'EXPORT'")
+
+        # Preview the deletion
+        cursor.execute("SELECT * FROM energy_stats WHERE energy_type = 'EXPORT'")
+        if cursor.fetchall():
+            print("Export data still exists. Something went wrong.")
+        else:
+            print("Export data successfully removed.")
+
+        # Rollback the transaction
+        conn.rollback()
+        print("Rollback completed. Export data was not deleted.")
+
+    except sqlite3.Error as e:
+        print(f"Error during transaction: {e}")
+        conn.rollback()
+
+    # Close the connection
     conn.close()
 
-    print("Data has been successfully loaded into the SQLite database.")
-
-    # Analyzing the database
-    conn = sqlite3.connect('wind_generation.db')
-    cursor = conn.cursor()
-
-    # Example query: Get the average wind generation for the year
-    cursor.execute('SELECT AVG(value) FROM wind_generation')
-    avg_generation = cursor.fetchone()[0]
-    print(f"Average wind generation: {avg_generation}")
-
-    conn.close()
 else:
     print(f"Error: {response.status_code} - {response.text}")
