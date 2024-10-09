@@ -58,12 +58,12 @@ if response.status_code == 200:
         if date:
             date = datetime.strptime(date, '%Y-%m').strftime('%Y-%m-%d')
         else:
-            continue  # Skip rows without a valid date
+            continue  
 
         # Extract energy type and consumption
         energy_type = row.get('fueltypeid', 'UNKNOWN')
-        consumption = row.get('value', 0)  # Assuming 'value' represents consumption
-        production = consumption  # This is an assumption; adjust based on actual API response
+        consumption = row.get('value', 0)  
+        production = consumption  
 
         # Insert data into the energy_stats table
         cursor.execute('INSERT INTO energy_stats (date, energy_type, consumption, production) VALUES (?, ?, ?, ?)', 
